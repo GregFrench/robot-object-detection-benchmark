@@ -1,0 +1,18 @@
+# Example Ultralytics dataset YAML for a prepared tabletop COCO subset.
+# Run scripts/prepare_coco_subset.py with --create-yolo-labels to create labels.
+path: data/coco_tabletop_subset
+train: images/train
+val: images/val
+
+nc: 10
+names:
+  - bottle
+  - cup
+  - bowl
+  - fork
+  - knife
+  - spoon
+  - apple
+  - banana
+  - book
+  - cell phone

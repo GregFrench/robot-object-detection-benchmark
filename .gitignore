@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.env
+.venv/
+venv/
+
+# Local datasets and COCO assets
+datasets/
+coco/
+COCO/
+data/coco*/
+data/**/images/
+data/**/*.jpg
+data/**/*.jpeg
+data/**/*.png
+data/**/*.json
+data/**/*.txt
+!data/README.md
+
+# Model artifacts and experiment outputs
+outputs/*
+!outputs/.gitkeep
+*.pt
+*.pth
+*.ckpt
+runs/
+wandb/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
