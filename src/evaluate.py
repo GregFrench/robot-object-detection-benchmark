@@ -60,6 +60,26 @@ def _prediction_to_record(prediction: dict[str, torch.Tensor], image_id: int, sc
     }
 
 
+def _prediction_to_jsonable(prediction: dict[str, Any]) -> dict[str, Any]:
+    """Convert numpy prediction arrays to plain JSON types."""
+
+    record = dict(prediction)
+    for key in ("boxes", "labels", "scores"):
+        value = record.get(key)
+        if isinstance(value, np.ndarray):
+            record[key] = value.tolist()
+    return record
+
+
+def _image_path_for_dataset_index(dataset, index: int) -> str | None:
+    """Best-effort image path lookup for datasets that expose COCO image records."""
+
+    if hasattr(dataset, "images") and hasattr(dataset, "resolve_image_path"):
+        image_info = dataset.images[index]
+        return str(dataset.resolve_image_path(image_info["file_name"]))
+    return None
+
+
 def _average_precision(recalls: np.ndarray, precisions: np.ndarray) -> float:
     """Compute area under the interpolated precision-recall curve."""
 
@@ -80,10 +100,10 @@ def evaluate_predictions(
     iou_threshold: float = 0.5,
     score_threshold: float = 0.05,
 ) -> dict[str, Any]:
-    """Evaluate detections with a simplified IoU-matching AP calculation.
+    """Evaluate detections with a VOC-style IoU-matching AP calculation.
 
-    This is intentionally labelled as simplified mAP because it reports AP at
-    one IoU threshold instead of the full COCO AP@[.50:.95] metric.
+    This reports AP at one IoU threshold and does not implement COCO area
+    ranges, max detections, crowd handling, or AP@[.50:.95].
     """
 
     foreground_class_ids = range(1, len(class_names))
@@ -158,9 +178,12 @@ def evaluate_predictions(
     valid_aps = [row["ap"] for row in class_metrics if row["num_ground_truth"] > 0]
     simplified_map = float(np.mean(valid_aps)) if valid_aps else 0.0
     summary = {
-        "metric_type": "simplified_iou_ap",
+        "metric_type": "voc_style_ap_at_single_iou",
+        "metric_note": "VOC-style AP at one IoU threshold; not COCO AP@[.50:.95].",
         "iou_threshold": iou_threshold,
         "score_threshold": score_threshold,
+        "map_at_iou": round(simplified_map, 6),
+        "map50": round(simplified_map, 6) if abs(iou_threshold - 0.5) < 1e-9 else None,
         "simplified_map": round(simplified_map, 6),
         "precision": round(total_tp / max(total_tp + total_fp, 1), 6),
         "recall": round(total_tp / max(total_gt, 1), 6),
@@ -188,6 +211,7 @@ def run_faster_rcnn_evaluation(
     model.eval()
     predictions: list[dict[str, Any]] = []
     targets: list[dict[str, Any]] = []
+    sample_index = 0
 
     with torch.no_grad():
         for images, batch_targets in tqdm(dataloader, desc="Evaluating", leave=False):
@@ -196,8 +220,12 @@ def run_faster_rcnn_evaluation(
             for output, target in zip(outputs, batch_targets):
                 target_record = _target_to_record(target)
                 prediction_record = _prediction_to_record(output, target_record["image_id"], score_threshold)
+                image_path = _image_path_for_dataset_index(dataset, sample_index)
+                if image_path is not None:
+                    prediction_record["image_path"] = image_path
                 predictions.append(prediction_record)
                 targets.append(target_record)
+                sample_index += 1
 
     class_names = ["__background__", *dataset.class_names]
     metrics = evaluate_predictions(
@@ -209,19 +237,29 @@ def run_faster_rcnn_evaluation(
     )
     metrics["model_name"] = model_name
     metrics["num_images"] = len(dataset)
+    metrics["class_names"] = class_names
     return EvaluationResult(metrics=metrics, predictions=predictions)
 
 
 def save_evaluation_result(result: EvaluationResult, output_dir: str | Path, run_name: str) -> dict[str, Path]:
-    """Save evaluation metrics as JSON and CSV."""
+    """Save evaluation metrics as JSON/CSV and predictions as JSON."""
 
     output_path = ensure_dir(output_dir)
     json_path = save_json(result.metrics, output_path / f"{run_name}_metrics.json")
     summary_row = {
         key: value
         for key, value in result.metrics.items()
-        if key not in {"class_metrics"}
+        if key not in {"class_metrics", "class_names"}
     }
     csv_path = save_csv([summary_row], output_path / f"{run_name}_metrics.csv")
     class_csv_path = save_csv(result.metrics["class_metrics"], output_path / f"{run_name}_class_metrics.csv")
-    return {"json": json_path, "csv": csv_path, "class_csv": class_csv_path}
+    predictions_path = save_json(
+        {
+            "model_name": result.metrics.get("model_name", run_name),
+            "metric_type": result.metrics.get("metric_type"),
+            "class_names": result.metrics.get("class_names", []),
+            "predictions": [_prediction_to_jsonable(prediction) for prediction in result.predictions],
+        },
+        output_path / f"{run_name}_predictions.json",
+    )
+    return {"json": json_path, "csv": csv_path, "class_csv": class_csv_path, "predictions": predictions_path}

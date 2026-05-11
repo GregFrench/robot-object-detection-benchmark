@@ -38,12 +38,26 @@ def visualize_prediction_file(args) -> int:
     with args.predictions.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
 
-    records = payload.get("predictions", payload if isinstance(payload, list) else [])
-    class_names = payload.get("class_names", with_background([])) if isinstance(payload, dict) else with_background([])
+    if isinstance(payload, list):
+        records = payload
+        class_names = with_background([])
+    elif isinstance(payload, dict):
+        records = payload.get("predictions", [])
+        class_names = payload.get("class_names", with_background([]))
+    else:
+        raise ValueError("Prediction file must contain a list or an object with a `predictions` list.")
+
     output_dir = ensure_dir(args.output_dir)
 
     for index, record in enumerate(records[: args.max_images]):
+        if "image_path" not in record:
+            raise ValueError(
+                "Prediction records must include `image_path` for visualization. "
+                "Use the predictions JSON written by scripts/evaluate_model.py or add image_path fields."
+            )
         image_path = Path(record["image_path"])
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Prediction image not found: {image_path}")
         image = Image.open(image_path).convert("RGB")
         output_path = output_dir / f"prediction_{index:03d}.jpg"
         draw_predictions(image, record, class_names, output_path, args.confidence_threshold, title=image_path.name)
@@ -74,7 +88,15 @@ def visualize_checkpoint(args) -> int:
     else:
         if args.checkpoint is None or args.data_dir is None or args.annotations is None:
             raise ValueError("`--checkpoint`, `--data-dir`, and `--annotations` are required unless --predictions or --mock-data is used.")
-        foreground_names = load_coco_class_names(args.annotations)
+        annotation_names = load_coco_class_names(args.annotations)
+        model, checkpoint = load_faster_rcnn_checkpoint(args.checkpoint, num_classes=args.num_classes, device=device)
+        checkpoint_names = checkpoint.get("class_names") if isinstance(checkpoint, dict) else None
+        foreground_names = checkpoint_names or annotation_names
+        missing = sorted(set(foreground_names) - set(annotation_names))
+        if missing:
+            raise ValueError(f"Checkpoint classes are missing from visualization annotations: {missing}")
+        if checkpoint_names and foreground_names != annotation_names:
+            print("Using checkpoint class order for visualization labels.")
         dataset = CocoDetectionDataset(
             image_dir=args.data_dir,
             annotation_path=args.annotations,
@@ -83,8 +105,6 @@ def visualize_checkpoint(args) -> int:
             max_samples=args.max_images,
         )
         class_names = with_background(foreground_names)
-        num_classes = args.num_classes or len(class_names)
-        model, _checkpoint = load_faster_rcnn_checkpoint(args.checkpoint, num_classes=num_classes, device=device)
 
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0, collate_fn=collate_fn)
     model.eval()

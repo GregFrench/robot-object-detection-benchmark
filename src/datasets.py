@@ -29,11 +29,22 @@ def _valid_bbox_xywh(bbox: list[float]) -> bool:
     return len(bbox) == 4 and bbox[2] > 0 and bbox[3] > 0
 
 
+def _categories_in_file_order(coco: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return categories in JSON order after basic validation."""
+
+    categories = coco.get("categories", [])
+    names = [category.get("name") for category in categories]
+    duplicate_names = sorted({name for name in names if names.count(name) > 1})
+    if duplicate_names:
+        raise ValueError(f"COCO categories contain duplicate names: {duplicate_names}")
+    return categories
+
+
 def load_coco_class_names(annotation_path: str | Path, classes: list[str] | None = None) -> list[str]:
-    """Load class names from a COCO annotation file, optionally filtered."""
+    """Load class names from a COCO annotation file, preserving JSON order."""
 
     coco = load_json(annotation_path)
-    categories = sorted(coco.get("categories", []), key=lambda item: item["id"])
+    categories = _categories_in_file_order(coco)
     available = [category["name"] for category in categories]
     if classes is None:
         return available
@@ -67,7 +78,7 @@ class CocoDetectionDataset(Dataset):
             raise FileNotFoundError(f"COCO annotation file not found: {self.annotation_path}")
 
         self.coco = load_json(self.annotation_path)
-        categories = sorted(self.coco.get("categories", []), key=lambda item: item["id"])
+        categories = _categories_in_file_order(self.coco)
         category_by_id = {category["id"]: category for category in categories}
 
         if classes is None:
@@ -145,11 +156,15 @@ class CocoDetectionDataset(Dataset):
         iscrowd = []
         for annotation in annotations:
             x_min, y_min, width, height = annotation["bbox"]
-            x_max = x_min + width
-            y_max = y_min + height
+            x_max = min(max(x_min + width, 0.0), float(image.width))
+            y_max = min(max(y_min + height, 0.0), float(image.height))
+            x_min = min(max(x_min, 0.0), float(image.width))
+            y_min = min(max(y_min, 0.0), float(image.height))
+            if x_max <= x_min or y_max <= y_min:
+                continue
             boxes.append([x_min, y_min, x_max, y_max])
             labels.append(self.category_id_to_label[annotation["category_id"]])
-            areas.append(float(annotation.get("area", width * height)))
+            areas.append(float((x_max - x_min) * (y_max - y_min)))
             iscrowd.append(int(annotation.get("iscrowd", 0)))
 
         target: Target = {

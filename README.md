@@ -11,14 +11,14 @@ This project is a public companion project inspired by prior robotics computer v
 - COCO-format dataset preparation for tabletop and household object classes
 - Faster R-CNN fine-tuning with TorchVision detection models
 - Optional YOLO training through the Ultralytics integration
-- Simplified IoU-based object detection metrics: AP, mAP, precision, and recall
+- VOC-style AP at a configurable IoU threshold, plus precision and recall
 - Inference latency benchmarking for robotics-oriented model comparison
 - Bounding-box visualization for qualitative inspection
 - CLI-first experiment workflow with readable Python modules
 
 ## Why Detection Matters For Robotics
 
-Object detection is often the first perception step before a robot can reason about the world. A 2D bounding box can feed downstream modules such as object tracking, depth lookup, 3D pose estimation, grasp candidate generation, human-assistive interaction, or task planning. For a robot, accuracy matters, but latency also matters because stale detections can lead to poor motion decisions.
+Object detection is often the first perception step before a robot can reason about the world. A 2D bounding box can feed downstream modules such as object tracking, depth lookup, 3D pose estimation, grasp candidate generation, human-assistive interaction, or task planning. This repository stops at 2D detection benchmarking; it does not claim robot-ready grasping, safety validation, or real-time deployment.
 
 ## Pipeline
 
@@ -84,7 +84,7 @@ This project does not download COCO automatically. Place COCO images and annotat
     instances_val2017.json
 ```
 
-The code also works with any custom COCO-format object detection dataset as long as the JSON contains `images`, `annotations`, and `categories`.
+The code also works with any custom COCO-format object detection dataset as long as the JSON contains `images`, `annotations`, and `categories`. Class order is preserved from the COCO `categories` list, and Faster R-CNN checkpoints store the class order used during training so validation labels can be remapped consistently.
 
 ## Prepare A COCO Tabletop Subset
 
@@ -98,6 +98,8 @@ python scripts/prepare_coco_subset.py \
   --split-name train \
   --classes bottle cup bowl fork knife spoon apple banana book "cell phone" \
   --limit-images 1000 \
+  --shuffle \
+  --seed 42 \
   --create-yolo-labels
 ```
 
@@ -124,7 +126,7 @@ python scripts/prepare_coco_subset.py \
   --dry-run
 ```
 
-The script writes filtered COCO annotations, image copies or symlinks, optional YOLO labels, and a dataset summary.
+The script writes filtered COCO annotations, image copies or symlinks, optional YOLO labels, and a dataset summary. COCO boxes are clipped to image bounds before YOLO conversion so normalized labels stay within the expected image coordinate frame.
 
 ## Train Faster R-CNN
 
@@ -190,15 +192,16 @@ python scripts/evaluate_model.py \
   --iou-threshold 0.5
 ```
 
-This implementation reports a simplified AP/mAP at one IoU threshold. It is useful for educational benchmarking and quick model comparison, but it is not a replacement for full COCO AP@[.50:.95].
+This implementation reports VOC-style AP at one IoU threshold. With `--iou-threshold 0.5`, the summary field `map50` is AP50 averaged across classes with ground-truth examples. It is useful for educational benchmarking and quick model comparison, but it is not COCO AP@[.50:.95] and does not include COCO area ranges, max detection caps, or crowd-region handling.
 
 Example metrics JSON:
 
 ```json
 {
-  "metric_type": "simplified_iou_ap",
+  "metric_type": "voc_style_ap_at_single_iou",
   "iou_threshold": 0.5,
-  "simplified_map": 0.421,
+  "map50": 0.421,
+  "map_at_iou": 0.421,
   "precision": 0.68,
   "recall": 0.55,
   "model_name": "faster_rcnn",
@@ -214,7 +217,7 @@ python scripts/compare_models.py \
   --output outputs/model_comparison.csv
 ```
 
-The comparison table includes model name, mAP or simplified mAP, precision, recall, latency when available, notes, and source file.
+The comparison table includes model name, mAP or AP-at-IoU, precision, recall, latency when available, notes, and source file. If metric and latency JSON files share the same `model_name`, the comparison script merges them into one row.
 
 ## Visualize Predictions
 
@@ -234,6 +237,15 @@ Visualizations are written to:
 
 ```text
 outputs/sample_predictions/
+```
+
+You can also visualize the prediction JSON written by evaluation:
+
+```bash
+python scripts/visualize_predictions.py \
+  --predictions outputs/metrics/faster_rcnn_predictions.json \
+  --confidence-threshold 0.5 \
+  --max-images 8
 ```
 
 ## Benchmark Latency
@@ -276,9 +288,10 @@ python scripts/benchmark_latency.py --help
 
 ## Limitations
 
-- The included mAP implementation is simplified and uses one IoU threshold.
+- The included AP implementation is VOC-style AP at one IoU threshold, not official COCO mAP.
 - The project benchmarks 2D object localization, not full 6D pose estimation.
 - COCO tabletop classes are a proxy for robotics scenes and may not match a real robot camera distribution.
+- A bounding box is only an upstream perception cue; robot grasping needs calibration, depth or pose estimation, motion planning, and safety checks.
 - YOLO metrics are not automatically normalized into the project metric schema; export or copy relevant results into `outputs/metrics/` for comparison.
 - No large datasets, trained weights, or experiment artifacts are committed.
 

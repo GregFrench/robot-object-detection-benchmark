@@ -30,6 +30,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--split-name", default="train", help="Split name to write, for example train or val.")
     parser.add_argument("--limit-images", type=int, default=None, help="Maximum number of matching images to include.")
+    parser.add_argument("--shuffle", action="store_true", help="Shuffle matching images before applying --limit-images.")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed used with --shuffle.")
     parser.add_argument(
         "--link-method",
         choices=["copy", "symlink"],
@@ -43,6 +45,30 @@ def parse_args() -> argparse.Namespace:
 
 def valid_bbox(bbox: list[float]) -> bool:
     return len(bbox) == 4 and bbox[2] > 0 and bbox[3] > 0
+
+
+def clipped_bbox_xywh(bbox: list[float], image_info: dict[str, Any]) -> list[float] | None:
+    """Clip a COCO xywh box to image bounds and drop boxes that collapse."""
+
+    if not valid_bbox(bbox):
+        return None
+    image_width = float(image_info.get("width", 0))
+    image_height = float(image_info.get("height", 0))
+    if image_width <= 0 or image_height <= 0:
+        return None
+
+    x_min, y_min, width, height = [float(value) for value in bbox]
+    x_max = x_min + width
+    y_max = y_min + height
+    x_min = min(max(x_min, 0.0), image_width)
+    y_min = min(max(y_min, 0.0), image_height)
+    x_max = min(max(x_max, 0.0), image_width)
+    y_max = min(max(y_max, 0.0), image_height)
+    clipped_width = x_max - x_min
+    clipped_height = y_max - y_min
+    if clipped_width <= 0 or clipped_height <= 0:
+        return None
+    return [x_min, y_min, clipped_width, clipped_height]
 
 
 def resolve_image_path(image_dir: Path, file_name: str) -> Path:
@@ -63,7 +89,10 @@ def copy_or_symlink(source: Path, destination: Path, method: str) -> None:
 
 
 def yolo_line(annotation: dict[str, Any], image_info: dict[str, Any], category_to_yolo_id: dict[int, int]) -> str:
-    x_min, y_min, width, height = annotation["bbox"]
+    clipped_bbox = clipped_bbox_xywh(annotation["bbox"], image_info)
+    if clipped_bbox is None:
+        raise ValueError(f"Invalid bbox after clipping for annotation {annotation.get('id')}")
+    x_min, y_min, width, height = clipped_bbox
     image_width = float(image_info["width"])
     image_height = float(image_info["height"])
     x_center = (x_min + width / 2.0) / image_width
@@ -86,6 +115,9 @@ def main() -> int:
         raise FileNotFoundError(f"COCO image directory not found: {args.coco_images}")
 
     target_classes = args.classes or DEFAULT_TABLETOP_CLASSES
+    duplicate_classes = sorted({class_name for class_name in target_classes if target_classes.count(class_name) > 1})
+    if duplicate_classes:
+        raise ValueError(f"Duplicate class names are not allowed: {duplicate_classes}")
     with args.coco_annotations.open("r", encoding="utf-8") as handle:
         coco = json.load(handle)
 
@@ -100,20 +132,37 @@ def main() -> int:
     category_to_yolo_id = {category["id"]: index for index, category in enumerate(selected_categories)}
 
     images_by_id = {int(image["id"]): image for image in coco.get("images", [])}
-    target_annotations = [
-        annotation
-        for annotation in coco.get("annotations", [])
-        if annotation.get("category_id") in selected_category_ids and valid_bbox(annotation.get("bbox", []))
-    ]
+    target_annotations = []
+    dropped_annotations = 0
+    for annotation in coco.get("annotations", []):
+        if annotation.get("category_id") not in selected_category_ids:
+            continue
+        image_info = images_by_id.get(int(annotation["image_id"]))
+        if image_info is None:
+            dropped_annotations += 1
+            continue
+        clipped_bbox = clipped_bbox_xywh(annotation.get("bbox", []), image_info)
+        if clipped_bbox is None:
+            dropped_annotations += 1
+            continue
+        cleaned_annotation = {**annotation, "bbox": clipped_bbox, "area": clipped_bbox[2] * clipped_bbox[3]}
+        target_annotations.append(cleaned_annotation)
     annotations_by_image: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for annotation in target_annotations:
         annotations_by_image[int(annotation["image_id"])].append(annotation)
 
+    candidate_image_ids = sorted(annotations_by_image)
     selected_image_ids = [
         image_id
-        for image_id in sorted(annotations_by_image)
+        for image_id in candidate_image_ids
         if image_id in images_by_id and resolve_image_path(args.coco_images, images_by_id[image_id]["file_name"]).is_file()
     ]
+    missing_image_files = len(candidate_image_ids) - len(selected_image_ids)
+    if args.shuffle:
+        import random
+
+        rng = random.Random(args.seed)
+        rng.shuffle(selected_image_ids)
     if args.limit_images is not None:
         selected_image_ids = selected_image_ids[: args.limit_images]
 
@@ -123,18 +172,19 @@ def main() -> int:
         annotation for annotation in target_annotations if int(annotation["image_id"]) in selected_image_id_set
     ]
 
-    class_counts = Counter(
-        categories_by_name[name]["name"]
-        for annotation in filtered_annotations
-        for name in target_classes
-        if categories_by_name[name]["id"] == annotation["category_id"]
-    )
+    category_id_to_name = {category["id"]: category["name"] for category in selected_categories}
+    counted_classes = Counter(category_id_to_name[annotation["category_id"]] for annotation in filtered_annotations)
+    class_counts = {class_name: counted_classes.get(class_name, 0) for class_name in target_classes}
     summary = {
         "split": args.split_name,
         "num_images": len(filtered_images),
         "num_annotations": len(filtered_annotations),
         "classes": target_classes,
-        "class_counts": dict(class_counts),
+        "class_counts": class_counts,
+        "dropped_annotations": dropped_annotations,
+        "missing_image_files": missing_image_files,
+        "shuffled": bool(args.shuffle),
+        "seed": args.seed if args.shuffle else None,
         "link_method": args.link_method,
         "yolo_labels": bool(args.create_yolo_labels),
     }
@@ -143,6 +193,11 @@ def main() -> int:
     if args.dry_run:
         print("Dry run complete. No files were written.")
         return 0
+    if not filtered_images:
+        raise ValueError(
+            "No matching images were found. Check class names, image directory, annotation file, "
+            "or use --dry-run to inspect the summary."
+        )
 
     annotation_dir = args.output_dir / "annotations"
     image_output_dir = args.output_dir / "images" / args.split_name
@@ -183,7 +238,7 @@ def main() -> int:
 
         val_path = "images/val" if (args.output_dir / "images" / "val").exists() else f"images/{args.split_name}"
         dataset_yaml = {
-            "path": str(args.output_dir),
+            "path": str(args.output_dir.resolve()),
             "train": "images/train" if (args.output_dir / "images" / "train").exists() else f"images/{args.split_name}",
             "val": val_path,
             "nc": len(target_classes),

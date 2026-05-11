@@ -13,7 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate Faster R-CNN with simplified IoU-based metrics.")
+    parser = argparse.ArgumentParser(description="Evaluate Faster R-CNN with VOC-style AP at a single IoU threshold.")
     parser.add_argument("--checkpoint", type=Path, default=None, help="Faster R-CNN checkpoint path.")
     parser.add_argument("--data-dir", type=Path, default=None, help="Validation image directory.")
     parser.add_argument("--annotations", type=Path, default=None, help="Validation COCO annotation JSON.")
@@ -33,7 +33,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    from src.config import with_background
     from src.datasets import CocoDetectionDataset, MockDetectionDataset, load_coco_class_names
     from src.evaluate import run_faster_rcnn_evaluation, save_evaluation_result
     from src.models import build_faster_rcnn, load_faster_rcnn_checkpoint
@@ -51,7 +50,15 @@ def main() -> int:
     else:
         if args.data_dir is None or args.annotations is None or args.checkpoint is None:
             raise ValueError("`--checkpoint`, `--data-dir`, and `--annotations` are required unless `--mock-data` is used.")
-        class_names = load_coco_class_names(args.annotations)
+        annotation_class_names = load_coco_class_names(args.annotations)
+        model, checkpoint = load_faster_rcnn_checkpoint(args.checkpoint, num_classes=args.num_classes, device=device)
+        checkpoint_class_names = checkpoint.get("class_names") if isinstance(checkpoint, dict) else None
+        class_names = checkpoint_class_names or annotation_class_names
+        missing = sorted(set(class_names) - set(annotation_class_names))
+        if missing:
+            raise ValueError(f"Checkpoint classes are missing from validation annotations: {missing}")
+        if checkpoint_class_names and class_names != annotation_class_names:
+            print("Using checkpoint class order for evaluation labels.")
         dataset = CocoDetectionDataset(
             image_dir=args.data_dir,
             annotation_path=args.annotations,
@@ -59,8 +66,6 @@ def main() -> int:
             transforms=get_eval_transform(),
             max_samples=args.max_samples,
         )
-        num_classes = args.num_classes or len(with_background(class_names))
-        model, _checkpoint = load_faster_rcnn_checkpoint(args.checkpoint, num_classes=num_classes, device=device)
 
     result = run_faster_rcnn_evaluation(
         model=model,
@@ -75,6 +80,7 @@ def main() -> int:
     paths = save_evaluation_result(result, args.output_dir, args.model_name)
     print(f"Saved metrics JSON: {paths['json']}")
     print(f"Saved metrics CSV: {paths['csv']}")
+    print(f"Saved predictions JSON: {paths['predictions']}")
     return 0
 
 

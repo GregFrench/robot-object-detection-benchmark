@@ -48,7 +48,15 @@ def main() -> int:
     else:
         if args.checkpoint is None or args.data_dir is None or args.annotations is None:
             raise ValueError("`--checkpoint`, `--data-dir`, and `--annotations` are required unless `--mock-data` is used.")
-        foreground_names = load_coco_class_names(args.annotations)
+        annotation_names = load_coco_class_names(args.annotations)
+        model, checkpoint = load_faster_rcnn_checkpoint(args.checkpoint, num_classes=args.num_classes, device=device)
+        checkpoint_names = checkpoint.get("class_names") if isinstance(checkpoint, dict) else None
+        foreground_names = checkpoint_names or annotation_names
+        missing = sorted(set(foreground_names) - set(annotation_names))
+        if missing:
+            raise ValueError(f"Checkpoint classes are missing from latency annotations: {missing}")
+        if checkpoint_names and foreground_names != annotation_names:
+            print("Using checkpoint class order for latency dataset labels.")
         dataset = CocoDetectionDataset(
             image_dir=args.data_dir,
             annotation_path=args.annotations,
@@ -57,8 +65,6 @@ def main() -> int:
             max_samples=args.num_images,
         )
         class_names = with_background(foreground_names)
-        num_classes = args.num_classes or len(class_names)
-        model, _checkpoint = load_faster_rcnn_checkpoint(args.checkpoint, num_classes=num_classes, device=device)
 
     images = [dataset[index][0] for index in range(min(args.num_images, len(dataset)))]
     metrics = benchmark_latency(model, images, device=device, warmup=args.warmup, iterations=args.num_images)

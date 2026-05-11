@@ -37,7 +37,7 @@ def build_faster_rcnn(num_classes: int, pretrained: bool = True, trainable_backb
 
 def load_faster_rcnn_checkpoint(
     checkpoint_path: str | Path,
-    num_classes: int,
+    num_classes: int | None,
     device,
     pretrained: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
@@ -51,7 +51,14 @@ def load_faster_rcnn_checkpoint(
 
     checkpoint = torch.load(checkpoint_file, map_location=device)
     state_dict = checkpoint.get("model_state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
-    model = build_faster_rcnn(num_classes=num_classes, pretrained=pretrained)
+    checkpoint_num_classes = checkpoint.get("num_classes") if isinstance(checkpoint, dict) else None
+    inferred_num_classes = state_dict["roi_heads.box_predictor.cls_score.weight"].shape[0]
+    resolved_num_classes = num_classes or checkpoint_num_classes or inferred_num_classes
+    if resolved_num_classes != inferred_num_classes:
+        raise ValueError(
+            f"Checkpoint head has {inferred_num_classes} classes, but {resolved_num_classes} were requested."
+        )
+    model = build_faster_rcnn(num_classes=resolved_num_classes, pretrained=pretrained)
     model.load_state_dict(state_dict)
     model.to(device)
     return model, checkpoint if isinstance(checkpoint, dict) else {"model_state_dict": state_dict}
