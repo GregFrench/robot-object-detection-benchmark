@@ -12,10 +12,6 @@ A PyTorch computer vision project benchmarking YOLO and Faster R-CNN for robotic
 - Bounding-box visualization for qualitative inspection
 - CLI-first experiment workflow with readable Python modules
 
-## Why Detection Matters For Robotics
-
-Object detection is often the first perception step before a robot can reason about the world. A 2D bounding box can feed downstream modules such as object tracking, depth lookup, 3D pose estimation, grasp candidate generation, human-assistive interaction, or task planning. This repository stops at 2D detection benchmarking; it does not claim robot-ready grasping, safety validation, or real-time deployment.
-
 ## Pipeline
 
 ```text
@@ -266,18 +262,4 @@ Example latency JSON:
   "images_per_second": 23.4,
   "device": "cuda:0"
 }
-```
-
-## Script Reference
-
-Each script supports `--help`:
-
-```bash
-python scripts/prepare_coco_subset.py --help
-python scripts/train_faster_rcnn.py --help
-python scripts/train_yolo.py --help
-python scripts/evaluate_model.py --help
-python scripts/compare_models.py --help
-python scripts/visualize_predictions.py --help
-python scripts/benchmark_latency.py --help
 ```
