@@ -2,10 +2,6 @@
 
 A PyTorch computer vision project benchmarking YOLO and Faster R-CNN for robotic object localization.
 
-This repository is a clean, public educational/demo implementation of a tabletop object detection workflow. It is designed to look like the perception side of a robot pick-and-place or assistive robotics pipeline: localize common objects, evaluate detection quality, benchmark inference latency, and visualize predictions for inspection.
-
-This project is a public companion project inspired by prior robotics computer vision work. It does not contain private research code or private datasets. The goal is to demonstrate the core ML engineering skills involved in robotic object detection: dataset preparation, model fine-tuning, evaluation, latency benchmarking, and prediction visualization.
-
 ## What This Demonstrates
 
 - COCO-format dataset preparation for tabletop and household object classes
@@ -285,26 +281,3 @@ python scripts/compare_models.py --help
 python scripts/visualize_predictions.py --help
 python scripts/benchmark_latency.py --help
 ```
-
-## Limitations
-
-- The included AP implementation is VOC-style AP at one IoU threshold, not official COCO mAP.
-- The project benchmarks 2D object localization, not full 6D pose estimation.
-- COCO tabletop classes are a proxy for robotics scenes and may not match a real robot camera distribution.
-- A bounding box is only an upstream perception cue; robot grasping needs calibration, depth or pose estimation, motion planning, and safety checks.
-- YOLO metrics are not automatically normalized into the project metric schema; export or copy relevant results into `outputs/metrics/` for comparison.
-- No large datasets, trained weights, or experiment artifacts are committed.
-
-## Future Improvements
-
-- Add SSD or RT-DETR as another detector family
-- Add segmentation masks for object contours
-- Add depth camera input for 3D localization
-- Add ROS 2 integration for publishing detections
-- Add real-time camera inference
-- Add robot grasp-point estimation from detections
-- Deploy models with ONNX or TensorRT
-
-## Publication Notes
-
-The repository is safe to publish publicly. Dataset artifacts, COCO images, checkpoints, runs, and generated outputs are ignored by default. Keep private datasets and institutional code outside this repo.
