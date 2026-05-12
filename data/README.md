@@ -20,6 +20,3 @@ data/
     dataset_summary_val.json
     yolo_dataset.yaml
 ```
-
-The `data/` directory is intentionally ignored for dataset artifacts so the
-repository stays safe to publish.
